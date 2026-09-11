@@ -301,7 +301,7 @@ def get_booked_seats(route_id):
     conn = get_db_connection()
     booked = conn.execute('''
         SELECT seat_number FROM tickets
-        WHERE route_id = ? AND travel_date = ? AND status = 'CONFIRMED'
+        WHERE route_id = ? AND travel_date = ? AND status IN ('CONFIRMED', 'PENDING')
     ''', (route_id, travel_date)).fetchall()
     conn.close()
 
@@ -366,23 +366,23 @@ def book_ticket(current_user):
         amount_paid = base_price
         valid_until = travel_date
 
-    # Check if seat is already booked for that date on that route
+    # Check if seat is already booked or pending for that date on that route
     conflict = cursor.execute('''
         SELECT id FROM tickets
-        WHERE route_id = ? AND travel_date = ? AND seat_number = ? AND status = 'CONFIRMED'
+        WHERE route_id = ? AND travel_date = ? AND seat_number = ? AND status IN ('CONFIRMED', 'PENDING')
     ''', (route_id, travel_date, seat_number)).fetchone()
 
     if conflict:
         conn.close()
-        return jsonify({"error": f"Seat #{seat_number} is already booked for {travel_date}. Please choose another seat."}), 409
+        return jsonify({"error": f"Seat #{seat_number} is already booked/pending for {travel_date}. Please choose another seat."}), 409
 
-    # Insert ticket record
+    # Insert ticket record with initial PENDING status (Awaiting Admin Approval)
     cursor.execute('''
         INSERT INTO tickets (
             user_id, route_id, travel_date, seat_number, pass_type,
             valid_until, student_id_number, amount_paid, is_boarded, status
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'CONFIRMED')
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'PENDING')
     ''', (current_user['id'], route_id, travel_date, seat_number, pass_type, valid_until, student_id_number, amount_paid))
     ticket_id = cursor.lastrowid
     conn.commit()
@@ -420,7 +420,7 @@ def book_ticket(current_user):
         conn.close()
 
     return jsonify({
-        "message": "Ticket booked successfully! Digital Pass & QR generated.",
+        "message": "Pass application submitted successfully! Status is PENDING Admin Approval.",
         "ticket": ticket_data
     }), 201
 
@@ -603,14 +603,25 @@ def verify_ticket(ticket_ref):
         }), 404
 
     ticket_data = dict(ticket)
-    # Check validity date
+    # Check validity date and approval status
     valid_until = ticket_data.get('valid_until') or ticket_data['travel_date']
     today_str = datetime.date.today().strftime("%Y-%m-%d")
     is_expired = valid_until < today_str
+    is_confirmed = (ticket_data.get('status') == 'CONFIRMED')
+    is_pending = (ticket_data.get('status') == 'PENDING')
+    is_valid = (not is_expired) and is_confirmed
+
+    status_message = "Pass is Confirmed & Active" if is_valid else (
+        "Pass is PENDING Admin Approval (Not yet active for boarding)" if is_pending else (
+            "Pass has EXPIRED" if is_expired else f"Pass status: {ticket_data.get('status')}"
+        )
+    )
 
     return jsonify({
-        "valid": not is_expired and ticket_data['status'] == 'CONFIRMED',
+        "valid": is_valid,
         "is_expired": is_expired,
+        "is_pending": is_pending,
+        "status_message": status_message,
         "is_boarded": bool(ticket_data.get('is_boarded')),
         "ticket": ticket_data
     }), 200
@@ -635,6 +646,80 @@ def mark_ticket_boarded(current_user, ticket_id):
     return jsonify({"message": f"Ticket #BP-{ticket_id:06d} marked as BOARDED successfully", "is_boarded": True}), 200
 
 # ----------------- Admin Management & Analytics Routes -----------------
+
+@app.route('/api/admin/tickets/<int:ticket_id>/approve', methods=['POST'])
+@token_required
+@admin_required
+def approve_ticket(current_user, ticket_id):
+    """
+    Admin approves a pending bus pass / ticket application.
+    Updates status to 'CONFIRMED' and regenerates official QR & PDF.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    ticket_row = cursor.execute('''
+        SELECT t.*, u.name as user_name, u.email as user_email,
+               r.source, r.destination, r.distance_km, r.price, r.departure_time
+        FROM tickets t
+        JOIN users u ON t.user_id = u.id
+        JOIN routes r ON t.route_id = r.id
+        WHERE t.id = ?
+    ''', (ticket_id,)).fetchone()
+
+    if not ticket_row:
+        conn.close()
+        return jsonify({"error": "Ticket not found"}), 404
+
+    ticket_data = dict(ticket_row)
+    ticket_data['status'] = 'CONFIRMED'
+
+    # Update database status to CONFIRMED
+    cursor.execute("UPDATE tickets SET status = 'CONFIRMED' WHERE id = ?", (ticket_id,))
+    conn.commit()
+
+    # Regenerate artifacts with CONFIRMED stamp
+    try:
+        qr_filename, qr_filepath = generate_qr_code(ticket_data, QR_DIR)
+        pdf_filename, _ = generate_pdf_ticket(ticket_data, qr_filepath, PDF_DIR)
+        cursor.execute("UPDATE tickets SET qr_filename = ?, pdf_filename = ? WHERE id = ?", (qr_filename, pdf_filename, ticket_id))
+        conn.commit()
+        ticket_data['qr_filename'] = qr_filename
+        ticket_data['pdf_filename'] = pdf_filename
+    except Exception as e:
+        print(f"Error regenerating approved artifacts: {e}")
+    finally:
+        conn.close()
+
+    return jsonify({
+        "message": f"Pass #BP-{ticket_id:06d} has been APPROVED and is now active!",
+        "ticket": ticket_data
+    }), 200
+
+@app.route('/api/admin/tickets/<int:ticket_id>/reject', methods=['POST'])
+@token_required
+@admin_required
+def reject_ticket(current_user, ticket_id):
+    """
+    Admin rejects a bus pass application.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    ticket = cursor.execute('SELECT * FROM tickets WHERE id = ?', (ticket_id,)).fetchone()
+    if not ticket:
+        conn.close()
+        return jsonify({"error": "Ticket not found"}), 404
+
+    cursor.execute("UPDATE tickets SET status = 'REJECTED' WHERE id = ?", (ticket_id,))
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        "message": f"Pass #BP-{ticket_id:06d} application was REJECTED.",
+        "ticket_id": ticket_id,
+        "status": "REJECTED"
+    }), 200
 
 @app.route('/api/admin/bookings', methods=['GET'])
 @token_required

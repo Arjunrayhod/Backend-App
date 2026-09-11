@@ -29,6 +29,9 @@ def generate_qr_code(ticket_data, output_dir):
     }
     pass_label = pass_type_labels.get(pass_type, 'STANDARD PASS')
 
+    status_val = ticket_data.get('status', 'PENDING')
+    qr_status = "VALID_ACTIVE" if status_val == 'CONFIRMED' else ("PENDING_APPROVAL" if status_val == 'PENDING' else "REJECTED")
+
     # Verification payload
     payload = {
         "ticket_id": ticket_id,
@@ -43,7 +46,7 @@ def generate_qr_code(ticket_data, output_dir):
         "pass_type": pass_label,
         "valid_until": ticket_data.get('valid_until') or ticket_data['travel_date'],
         "fare": f"Rs. {ticket_data.get('amount_paid', ticket_data['price']):.2f}",
-        "status": "VALID_ACTIVE"
+        "status": qr_status
     }
 
     qr = qrcode.QRCode(
@@ -186,18 +189,26 @@ def generate_pdf_ticket(ticket_data, qr_filepath, output_dir):
     story.append(Spacer(1, 10))
 
     # 2. Status & Ticket ID Bar
+    status_val = ticket_data.get('status', 'PENDING')
+    if status_val == 'CONFIRMED':
+        status_html = "<font color='#059669'><b>CONFIRMED & ACTIVE</b></font>"
+    elif status_val == 'PENDING':
+        status_html = "<font color='#D97706'><b>PENDING ADMIN APPROVAL</b></font>"
+    else:
+        status_html = "<font color='#DC2626'><b>REJECTED / CANCELLED</b></font>"
+
     status_data = [
         [
             Paragraph(f"<b>TICKET ID:</b> #BP-{ticket_id:06d}", label_style),
-            Paragraph(f"<b>STATUS:</b> <font color='#059669'><b>CONFIRMED & ACTIVE</b></font>", label_style),
+            Paragraph(f"<b>STATUS:</b> {status_html}", label_style),
             Paragraph(f"<b>VALIDITY:</b> {ticket_data['travel_date']} to {valid_until}", label_style)
         ]
     ]
-    status_table = Table(status_data, colWidths=[150, 180, 190])
+    status_table = Table(status_data, colWidths=[140, 190, 190])
     status_table.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#F3F4F6')),
+        ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#FEF3C7') if status_val == 'PENDING' else colors.HexColor('#F3F4F6')),
         ('PADDING', (0,0), (-1,-1), 6),
-        ('BOX', (0,0), (-1,-1), 0.5, colors.HexColor('#D1D5DB')),
+        ('BOX', (0,0), (-1,-1), 0.5, colors.HexColor('#F59E0B') if status_val == 'PENDING' else colors.HexColor('#D1D5DB')),
     ]))
     story.append(status_table)
     story.append(Spacer(1, 12))
