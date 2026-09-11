@@ -444,32 +444,80 @@ def get_my_tickets(current_user):
 @app.route('/api/ticket/qr/<int:ticket_id>', methods=['GET'])
 def get_ticket_qr(ticket_id):
     conn = get_db_connection()
-    ticket = conn.execute('SELECT qr_filename FROM tickets WHERE id = ?', (ticket_id,)).fetchone()
+    cursor = conn.cursor()
+    ticket_row = cursor.execute('''
+        SELECT t.*, u.name as user_name, u.email as user_email,
+               r.source, r.destination, r.distance_km, r.price, r.departure_time
+        FROM tickets t
+        JOIN users u ON t.user_id = u.id
+        JOIN routes r ON t.route_id = r.id
+        WHERE t.id = ?
+    ''', (ticket_id,)).fetchone()
+
+    if not ticket_row:
+        conn.close()
+        return jsonify({"error": "Ticket not found"}), 404
+
+    ticket_data = dict(ticket_row)
+    qr_filename = ticket_data.get('qr_filename') or f"ticket_qr_{ticket_id}.png"
+    qr_path = os.path.join(QR_DIR, qr_filename)
+
+    if not os.path.exists(qr_path):
+        try:
+            qr_filename, qr_path = generate_qr_code(ticket_data, QR_DIR)
+            cursor.execute('UPDATE tickets SET qr_filename = ? WHERE id = ?', (qr_filename, ticket_id))
+            conn.commit()
+        except Exception as e:
+            print(f"Error regenerating QR: {e}")
     conn.close()
 
-    if not ticket or not ticket['qr_filename']:
-        return jsonify({"error": "QR code not found for this ticket"}), 404
-
-    qr_path = os.path.join(QR_DIR, ticket['qr_filename'])
     if not os.path.exists(qr_path):
-        return jsonify({"error": "QR file missing from server"}), 404
+        return jsonify({"error": "QR image missing"}), 404
 
     return send_file(qr_path, mimetype='image/png', as_attachment=False)
 
 @app.route('/api/ticket/pdf/<int:ticket_id>', methods=['GET'])
 def get_ticket_pdf(ticket_id):
     conn = get_db_connection()
-    ticket = conn.execute('SELECT pdf_filename FROM tickets WHERE id = ?', (ticket_id,)).fetchone()
+    cursor = conn.cursor()
+    ticket_row = cursor.execute('''
+        SELECT t.*, u.name as user_name, u.email as user_email,
+               r.source, r.destination, r.distance_km, r.price, r.departure_time
+        FROM tickets t
+        JOIN users u ON t.user_id = u.id
+        JOIN routes r ON t.route_id = r.id
+        WHERE t.id = ?
+    ''', (ticket_id,)).fetchone()
+
+    if not ticket_row:
+        conn.close()
+        return jsonify({"error": "Ticket not found"}), 404
+
+    ticket_data = dict(ticket_row)
+    pdf_filename = ticket_data.get('pdf_filename') or f"ticket_{ticket_id}.pdf"
+    pdf_path = os.path.join(PDF_DIR, pdf_filename)
+
+    # Regenerate on the fly if disk was reset by Render
+    if not os.path.exists(pdf_path):
+        try:
+            qr_filename, qr_path = generate_qr_code(ticket_data, QR_DIR)
+            pdf_filename, pdf_path = generate_pdf_ticket(ticket_data, qr_path, PDF_DIR)
+            cursor.execute('UPDATE tickets SET qr_filename = ?, pdf_filename = ? WHERE id = ?', (qr_filename, pdf_filename, ticket_id))
+            conn.commit()
+        except Exception as e:
+            print(f"Error regenerating PDF: {e}")
     conn.close()
 
-    if not ticket or not ticket['pdf_filename']:
-        return jsonify({"error": "PDF not found for this ticket"}), 404
-
-    pdf_path = os.path.join(PDF_DIR, ticket['pdf_filename'])
     if not os.path.exists(pdf_path):
-        return jsonify({"error": "PDF file missing on server"}), 404
+        return jsonify({"error": "PDF file could not be generated"}), 500
 
-    return send_file(pdf_path, mimetype='application/pdf', as_attachment=False, download_name=ticket['pdf_filename'])
+    download_mode = request.args.get('download', '1') == '1'
+    return send_file(
+        pdf_path,
+        mimetype='application/pdf',
+        as_attachment=download_mode,
+        download_name=f"CloudBus_Pass_BP{ticket_id:06d}.pdf"
+    )
 
 @app.route('/api/tickets/<int:ticket_id>', methods=['DELETE'])
 @token_required
