@@ -512,12 +512,16 @@ def get_ticket_pdf(ticket_id):
         return jsonify({"error": "PDF file could not be generated"}), 500
 
     download_mode = request.args.get('download', '1') == '1'
-    return send_file(
+    response = send_file(
         pdf_path,
         mimetype='application/pdf',
         as_attachment=download_mode,
         download_name=f"CloudBus_Pass_BP{ticket_id:06d}.pdf"
     )
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Content-Disposition'] = f'{"attachment" if download_mode else "inline"}; filename="CloudBus_Pass_BP{ticket_id:06d}.pdf"'
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    return response
 
 @app.route('/api/tickets/<int:ticket_id>', methods=['DELETE'])
 @token_required
