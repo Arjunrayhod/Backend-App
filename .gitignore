@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+buspass.db
+static/tickets/qr/*
+static/tickets/pdf/*
+.env
+.DS_Store
