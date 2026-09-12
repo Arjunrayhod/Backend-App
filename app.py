@@ -756,7 +756,7 @@ def get_all_users(current_user):
 @admin_required
 def get_admin_stats(current_user):
     conn = get_db_connection()
-    total_users = conn.execute('SELECT COUNT(*) as c FROM users WHERE role = "user"').fetchone()['c']
+    total_users = conn.execute("SELECT COUNT(*) as c FROM users WHERE role = 'user'").fetchone()['c']
     total_routes = conn.execute('SELECT COUNT(*) as c FROM routes').fetchone()['c']
     total_tickets = conn.execute('SELECT COUNT(*) as c FROM tickets').fetchone()['c']
     revenue_res = conn.execute('''
@@ -962,7 +962,7 @@ def resolve_support_query(current_user, msg_id):
     """
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('UPDATE support_messages SET status = "RESOLVED" WHERE id = ?', (msg_id,))
+    cursor.execute("UPDATE support_messages SET status = 'RESOLVED' WHERE id = ?", (msg_id,))
     conn.commit()
     conn.close()
 
