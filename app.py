@@ -84,7 +84,7 @@ def generate_jwt_token(user_id, email, role):
         'user_id': user_id,
         'email': email,
         'role': role,
-        'exp': datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=24),
+        'exp': datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30),
         'iat': datetime.datetime.now(datetime.timezone.utc)
     }
     return jwt.encode(payload, app.config['SECRET_KEY'], algorithm="HS256")
